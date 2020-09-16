@@ -25,10 +25,6 @@ from pipeline.results import Model, Evaluation
 from pipeline.evaluations import Evaluations
 
 
-# def redis_connect(host=RedisConfig().host, port=RedisConfig().port, db=0):
-#     return redis.Redis(host=host, port=port, db=db)
-
-
 class RedisCleanUp(luigi.Task):
     id = luigi.IntParameter()
     pattern = luigi.Parameter(default="*")
@@ -105,7 +101,7 @@ class TrainTestSplit(luigi.Task):
         return [BuildMatrix(id=self.id)]
 
 
-class TrainTestModel(DBCredentialMixin, luigi.Task):
+class ModelAndEvaluate(DBCredentialMixin, luigi.Task):
     id = luigi.IntParameter()
     class_path = luigi.Parameter()
     params = luigi.DictParameter()
@@ -295,7 +291,7 @@ class TrainTestModel(DBCredentialMixin, luigi.Task):
         )
 
 
-class CreateKFolds(luigi.WrapperTask):
+class KFoldsSplit(luigi.WrapperTask):
     id = luigi.IntParameter()
     model_config = luigi.DictParameter(visibility=ParameterVisibility.HIDDEN)
     fold_id = luigi.IntParameter()
@@ -317,7 +313,7 @@ class CreateKFolds(luigi.WrapperTask):
 
     def requires(self):
         for grid in self.flatten_grid():
-            yield TrainTestModel(
+            yield ModelAndEvaluate(
                 id=self.id,
                 class_path=grid['class_path'],
                 params=grid['params'],
@@ -340,7 +336,7 @@ class Experiment(luigi.WrapperTask):
 
     def requires(self):
         for i in range(self.k_fold):
-            yield CreateKFolds(
+            yield KFoldsSplit(
                 id=self.id,
                 fold_id=i,
                 model_config=self.model_config_dict,
