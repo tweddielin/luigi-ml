@@ -7,7 +7,6 @@ import yaml
 import luigi
 from luigi.parameter import ParameterVisibility
 from luigi.contrib.simulate import RunAnywayTarget
-from luigi.contrib.redis_store import RedisTarget
 
 import redis
 import pandas as pd
@@ -20,80 +19,14 @@ from sklearn.model_selection import ParameterGrid
 from sklearn.model_selection import KFold
 from sklearn.preprocessing import LabelEncoder
 
-from pipeline.luigi_ext import DBCredentialMixin, RowPostgresTarget, RedisConfig
-from pipeline.utils import filename_friendly_hash, scoped_session
-from pipeline.results import Model, Evaluations
+from pipeline.luigi_ext import DBCredentialMixin, RowPostgresTarget, RedisConfig, NewRedisTarget
+from pipeline.utils import filename_friendly_hash, scoped_session, redis_connect, encoding_cat_feats
+from pipeline.results import Model, Evaluation
+from pipeline.evaluations import Evaluations
 
 
-class Evaluation(object):
-    def __init__(self, test_matrix, label_column='status', model=None, model_id=None):
-        self.matrix = test_matrix
-        self.model = model
-        self.model_id = model_id
-        self.label_column = label_column
-        self.predictions = test_matrix[[label_column]]
-        self.predictions['score'] = self.model.predict_proba(self.matrix.drop(self.label_column, axis=1, inplace=False))[:, 1]
-
-    @cachedproperty
-    def evaluated_matrix(self):
-        evaluated = self.matrix.copy()
-        evaluated['score'] = self.predictions['score']
-        evaluated['entity_id'] = evaluated.index
-        evaluated['model_id'] = [self.model_id]*len(evaluated)
-        evaluated['rank_abs'] = evaluated['score'].rank(ascending=False, method='first')
-        evaluated['rank_pct'] = evaluated['score'].rank(ascending=False, pct=True)
-        evaluated['label'] = evaluated[self.label_column].apply(lambda x: True if x == 1 else False)
-        return evaluated
-
-    @cachedproperty
-    def feature_importance(self):
-        try:
-            feature_importances = self.model.feature_importances_
-        except AttributeError:
-            try:
-                feature_importances = self.model.coef_[0]
-            except AttributeError:
-                feature_importances = None
-        feature_names = self.matrix.drop([self.label_column], axis=1, inplace=False).columns
-        importance = pd.DataFrame({
-            "feature": feature_names,
-            "importance": feature_importances
-        })
-        return importance.sort_values(by='importance', ascending=False)
-
-    def topK(self, k):
-        return self.matrix[self.evaluated_matrix['rank_abs'] <= k]
-
-    def precision_at_top(self, k):
-        ranked = self.predictions.sort_values(by='score', ascending=False)
-        return ranked[:k][self.label_column].sum() / k
-
-    def recall_at_top(self, k):
-        ranked = self.predictions.sort_values(by='score', ascending=False)
-        return ranked[:k][self.label_column].sum() / ranked[self.label_column].sum()
-
-    def compute_AUC(self):
-        '''
-        Utility function to generate ROC and AUC data to plot ROC curve
-        Returns (tuple):
-            - (false positive rate, true positive rate, thresholds, AUC)
-        '''
-
-        label_ = self.predictions[self.label_column]
-        score_ = self.predictions['socre']
-        fpr, tpr, thresholds = metrics.roc_curve(
-            label_, score_, pos_label=1)
-
-        return (fpr, tpr, thresholds, metrics.auc(fpr, tpr))
-
-
-class NewRedisTarget(RedisTarget):
-    def marker_key(self):
-        return self.update_id
-
-
-def redis_connect(host=RedisConfig().host, port=RedisConfig().port, db=0):
-    return redis.Redis(host=host, port=port, db=db)
+# def redis_connect(host=RedisConfig().host, port=RedisConfig().port, db=0):
+#     return redis.Redis(host=host, port=port, db=db)
 
 
 class RedisCleanUp(luigi.Task):
@@ -104,14 +37,6 @@ class RedisCleanUp(luigi.Task):
         r = redis_connect()
         for key in r.scan_iter(self.pattern):
             r.delete(key)
-
-
-def encoding_cat_feats(df, list_of_cat):
-    df = df.copy()
-    encoder = LabelEncoder()
-    for cat_feat in list_of_cat:
-        df[cat_feat] = encoder.fit_transform(df[cat_feat])
-    return df
 
 
 class LoadData(luigi.Task):
@@ -158,7 +83,7 @@ class BuildMatrix(luigi.Task):
         )
 
 
-class Split(luigi.Task):
+class TrainTestSplit(luigi.Task):
     id = luigi.IntParameter()
     k_fold = luigi.IntParameter()
 
@@ -171,10 +96,10 @@ class Split(luigi.Task):
         for i, indices in enumerate(cv.split(df)):
             train_index, test_index = indices
             index_dict = {'train_index': train_index.tolist(), 'test_index': test_index.tolist()}
-            redis_conn.set(f"test_id:{i}", json.dumps(index_dict))
+            redis_conn.set(f"fold_id:{i}", json.dumps(index_dict))
 
     def output(self):
-        return [NewRedisTarget(host=RedisConfig().host, port=6379, db=0, update_id=f"test_id:{x}") for x in range(self.k_fold)]
+        return [NewRedisTarget(host=RedisConfig().host, port=6379, db=0, update_id=f"fold_id:{x}") for x in range(self.k_fold)]
 
     def requires(self):
         return [BuildMatrix(id=self.id)]
@@ -186,7 +111,7 @@ class TrainTestModel(DBCredentialMixin, luigi.Task):
     params = luigi.DictParameter()
     evaluation_config = luigi.DictParameter()
     label_column = luigi.Parameter()
-    test_id = luigi.IntParameter()
+    fold_id = luigi.IntParameter()
     k_fold = luigi.IntParameter()
 
     @property
@@ -214,9 +139,7 @@ class TrainTestModel(DBCredentialMixin, luigi.Task):
         unique = {
             "class_path": self.class_path,
             "parameters": dict(self.params),
-            "test_id": self.test_id,
-            "train_index": self.train_test_index_dict['train_index'],
-            "test_index": self.train_test_index_dict['test_index'],
+            "fold_id": self.fold_id,
             "label_column": self.label_column,
             "k_fold": self.k_fold,
         }
@@ -234,7 +157,7 @@ class TrainTestModel(DBCredentialMixin, luigi.Task):
     @cachedproperty
     def train_test_index_dict(self):
         redis_conn = redis_connect()
-        index_dict = json.loads(redis_conn.get(f"test_id:{self.test_id}"))
+        index_dict = json.loads(redis_conn.get(f"fold_id:{self.fold_id}"))
         return index_dict
 
     @cachedproperty
@@ -267,7 +190,7 @@ class TrainTestModel(DBCredentialMixin, luigi.Task):
         train_base_number = sum(train_labels == 1)
         test_base_number = sum(test_labels == 1)
 
-        ev = Evaluation(test_matrix=test, model=instance)
+        ev = Evaluations(test_matrix=test, model=instance)
         result = {
                 "model_uuid": self.model_uuid,
                 "class_path": self.class_path,
@@ -330,7 +253,7 @@ class TrainTestModel(DBCredentialMixin, luigi.Task):
                     column_name="evaluation_id",
                     update_id=evaluation_id)
                 if not target.exists():
-                    row_evaluation = Evaluations(
+                    row_evaluation = Evaluation(
                         evaluation_id=evaluation_id,
                         model_uuid=result['model_uuid'],
                         model_group_id=result['model_group_id'],
@@ -366,7 +289,7 @@ class TrainTestModel(DBCredentialMixin, luigi.Task):
                   update_id=self.model_uuid)
 
     def requires(self):
-        return Split(
+        return TrainTestSplit(
             id=self.id,
             k_fold=self.k_fold,
         )
@@ -375,7 +298,7 @@ class TrainTestModel(DBCredentialMixin, luigi.Task):
 class CreateKFolds(luigi.WrapperTask):
     id = luigi.IntParameter()
     model_config = luigi.DictParameter(visibility=ParameterVisibility.HIDDEN)
-    test_id = luigi.IntParameter()
+    fold_id = luigi.IntParameter()
     k_fold = luigi.IntParameter()
 
     @property
@@ -400,7 +323,7 @@ class CreateKFolds(luigi.WrapperTask):
                 params=grid['params'],
                 evaluation_config=self.evaluation_config,
                 label_column=self.label_column,
-                test_id=self.test_id,
+                fold_id=self.fold_id,
                 k_fold=self.k_fold,
             )
 
@@ -419,7 +342,7 @@ class Experiment(luigi.WrapperTask):
         for i in range(self.k_fold):
             yield CreateKFolds(
                 id=self.id,
-                test_id=i,
+                fold_id=i,
                 model_config=self.model_config_dict,
                 k_fold=self.k_fold,
             )

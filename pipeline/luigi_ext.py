@@ -10,6 +10,18 @@ from pathlib import Path
 import psycopg2
 import psycopg2.errorcodes
 
+from luigi.contrib.redis_store import RedisTarget
+
+
+def redis_connect(host, port, db=0):
+    return redis.Redis(host=host, port=port, db=db)
+
+
+class NewRedisTarget(RedisTarget):
+    def marker_key(self):
+        return self.update_id
+
+
 class ConfigParameter(luigi.Parameter):
     def parse(self, x):
         with open(x) as f:

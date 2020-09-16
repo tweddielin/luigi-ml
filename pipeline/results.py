@@ -35,7 +35,7 @@ class Model(Base):
     model_group_id = Column(String)
     k_fold = Column(Integer)
 
-class Evaluations(Base):
+class Evaluation(Base):
     __tablename__ = "evaluation"
     __table_args__ = {"schema": "results"}
 
