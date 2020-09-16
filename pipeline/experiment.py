@@ -110,12 +110,7 @@ class ModelAndEvaluate(DBCredentialMixin, luigi.Task):
     fold_id = luigi.IntParameter()
     k_fold = luigi.IntParameter()
 
-    @property
-    def evaluation_id_list(self):
-        evaluation_id_list = []
-        for metric, parameter in itertools.product(self.evaluation_config['metrics'], self.evaluation_config['parameters']):
-            evaluation_id_list.append(self.create_evaluation_id(metric, parameter))
-        return evaluation_id_list
+    evaluation_id_list = []
 
     def create_evaluation_id(self, metric, parameter):
         unique = {
@@ -161,6 +156,12 @@ class ModelAndEvaluate(DBCredentialMixin, luigi.Task):
         redis_conn = redis_connect()
         df = pd.read_msgpack(redis_conn.get("matrix"))
         return df
+
+    def filter_parameter(self, x):
+        if '@' not in x[0] and x[1] != 'all':
+            return False
+        else:
+            return True
 
     def run(self):
         df = self.matrix
@@ -226,18 +227,21 @@ class ModelAndEvaluate(DBCredentialMixin, luigi.Task):
                     model_group_id=result['model_group_id'],
                     k_fold=result['k_fold'],
                 )
-            session.add(row_model)
+                session.add(row_model)
 
-            for metric, parameter in itertools.product(self.evaluation_config['metrics'], self.evaluation_config['parameters']):
-                if metric == 'precision':
-                    evaluate_fn = ev.precision_at_top
-                elif metric == 'recall':
-                    evaluate_fn = ev.recall_at_top
-
+            metric_parameter_product = itertools.product(self.evaluation_config['metrics'], self.evaluation_config['parameters'])
+            for metric, parameter in [x for x in filter(self.filter_parameter, metric_parameter_product)]:
                 if parameter == 'all':
-                    evaluate_value = evaluate_fn(len(test))
+                    k = len(test)
                 else:
-                    evaluate_value = evaluate_fn(int(parameter))
+                    k = int(parameter)
+
+                if metric == 'precision@':
+                    evaluate_value = ev.precision_at_topk(k)
+                elif metric == 'recall@':
+                    evaluate_value = ev.recall_at_topk(k)
+                elif metric == 'roc_auc':
+                    evaluate_value = ev.roc_auc_score()
 
                 evaluation_id = self.create_evaluation_id(metric, parameter)
                 target = RowPostgresTarget(
@@ -257,11 +261,12 @@ class ModelAndEvaluate(DBCredentialMixin, luigi.Task):
                         test_base_number=result['test_base_number'],
                         test_total_number=result['test_total_number'],
                         test_index=result['test_index'],
-                        metric=metric+'@',
+                        metric=metric,
                         parameter=parameter,
                         value=evaluate_value,
                         k_fold=result['k_fold'],
                     )
+                    self.evaluation_id_list.append(evaluation_id)
                     session.add(row_evaluation)
 
 
