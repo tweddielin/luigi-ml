@@ -1,0 +1,15 @@
+luigi
+redis
+ohio
+pandas==0.25.1
+scikit-learn
+scipy
+matplotlib
+Dickens
+PyYAML
+SQLAlchemy
+matplotlib
+numpy
+psycopg2-binary
+python-dateutil
+seaborn
