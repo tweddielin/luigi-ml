@@ -21,8 +21,8 @@ grid_config:
 
 
 evaluation_config:
-    metrics: [precision, recall]
-    parameters: [10, 20, all]
+    metrics: [precision@, recall@, roc_auc]
+    parameters: [20, all]
 
 
 label_config:

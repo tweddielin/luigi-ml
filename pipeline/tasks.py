@@ -101,6 +101,15 @@ class TrainTestSplit(luigi.Task):
         return [BuildMatrix(id=self.id)]
 
 
+class Fold(luigi.WrapperTask):
+    id = luigi.IntParameter()
+    fold_id = luigi.Parameter()
+    k_fold = luigi.IntParameter()
+
+    def requires(self):
+        return TrainTestSplit(id=self.id, k_fold=self.k_fold)
+
+
 class ModelAndEvaluate(DBCredentialMixin, luigi.Task):
     id = luigi.IntParameter()
     class_path = luigi.Parameter()
@@ -290,43 +299,10 @@ class ModelAndEvaluate(DBCredentialMixin, luigi.Task):
                   update_id=self.model_uuid)
 
     def requires(self):
-        return TrainTestSplit(
+        return Fold(
             id=self.id,
-            k_fold=self.k_fold,
-        )
-
-
-class KFoldsSplit(luigi.WrapperTask):
-    id = luigi.IntParameter()
-    model_config = luigi.DictParameter(visibility=ParameterVisibility.HIDDEN)
-    fold_id = luigi.IntParameter()
-    k_fold = luigi.IntParameter()
-
-    @property
-    def label_column(self):
-        return self.model_config['label_config']['label_column'][0]
-
-    @property
-    def evaluation_config(self):
-        return self.model_config['evaluation_config']
-
-    def flatten_grid(self):
-        grid_config = self.model_config['grid_config']
-        for class_path, param_config in grid_config.items():
-            for p in ParameterGrid(dict(param_config)):
-                yield {'class_path': class_path, 'params': p}
-
-    def requires(self):
-        for grid in self.flatten_grid():
-            yield ModelAndEvaluate(
-                id=self.id,
-                class_path=grid['class_path'],
-                params=grid['params'],
-                evaluation_config=self.evaluation_config,
-                label_column=self.label_column,
-                fold_id=self.fold_id,
-                k_fold=self.k_fold,
-            )
+            fold_id=self.fold_id,
+            k_fold=self.k_fold)
 
 
 class Experiment(luigi.WrapperTask):
@@ -339,12 +315,33 @@ class Experiment(luigi.WrapperTask):
         config = yaml.safe_load(open(self.model_config))
         return config
 
-    def requires(self):
+    @property
+    def label_column(self):
+        return self.model_config_dict['label_config']['label_column'][0]
+
+    @property
+    def evaluation_config(self):
+        return self.model_config_dict['evaluation_config']
+
+    def flatten_grid(self):
+        grid_config = self.model_config_dict['grid_config']
+        for class_path, param_config in grid_config.items():
+            for p in ParameterGrid(dict(param_config)):
+                yield {'class_path': class_path, 'params': p}
+
+    def kfold_grid(self):
         for i in range(self.k_fold):
-            yield KFoldsSplit(
+            yield i
+
+    def requires(self):
+        for grid, fold_id in itertools.product(self.flatten_grid(), self.kfold_grid()):
+            yield ModelAndEvaluate(
                 id=self.id,
-                fold_id=i,
-                model_config=self.model_config_dict,
+                class_path=grid['class_path'],
+                params=grid['params'],
+                evaluation_config=self.evaluation_config,
+                label_column=self.label_column,
+                fold_id=fold_id,
                 k_fold=self.k_fold,
             )
 
