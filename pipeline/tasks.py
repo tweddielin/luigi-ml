@@ -3,6 +3,7 @@ import json
 import time
 import importlib
 import yaml
+import datetime
 
 import luigi
 from luigi.parameter import ParameterVisibility
@@ -26,7 +27,6 @@ from pipeline.evaluations import Evaluations
 
 
 class RedisCleanUp(luigi.Task):
-    id = luigi.IntParameter()
     pattern = luigi.Parameter(default="*")
 
     def run(self):
@@ -36,7 +36,7 @@ class RedisCleanUp(luigi.Task):
 
 
 class LoadData(luigi.Task):
-    id = luigi.IntParameter()
+    id = luigi.Parameter()
 
     def run(self):
         df = pd.read_csv('placement_data_full_class.csv')
@@ -49,7 +49,7 @@ class LoadData(luigi.Task):
 
 
 class BuildMatrix(luigi.Task):
-    id = luigi.IntParameter()
+    id = luigi.Parameter()
 
     def run(self):
         redis_conn = redis_connect()
@@ -80,7 +80,7 @@ class BuildMatrix(luigi.Task):
 
 
 class TrainTestSplit(luigi.Task):
-    id = luigi.IntParameter()
+    id = luigi.Parameter()
     k_fold = luigi.IntParameter()
 
     def run(self):
@@ -111,7 +111,7 @@ class Fold(luigi.WrapperTask):
 
 
 class ModelAndEvaluate(DBCredentialMixin, luigi.Task):
-    id = luigi.IntParameter()
+    id = luigi.Parameter()
     class_path = luigi.Parameter()
     params = luigi.DictParameter()
     evaluation_config = luigi.DictParameter()
@@ -306,7 +306,6 @@ class ModelAndEvaluate(DBCredentialMixin, luigi.Task):
 
 
 class Experiment(luigi.WrapperTask):
-    id = luigi.IntParameter()
     model_config = luigi.Parameter(description="model configuration file path")
     k_fold = luigi.IntParameter()
 
@@ -323,6 +322,11 @@ class Experiment(luigi.WrapperTask):
     def evaluation_config(self):
         return self.model_config_dict['evaluation_config']
 
+    @cachedproperty
+    def experiment_id(self):
+        unique = str(datetime.datetime.now()).replace(' ', '-').replace('-', '_')
+        return unique
+
     def flatten_grid(self):
         grid_config = self.model_config_dict['grid_config']
         for class_path, param_config in grid_config.items():
@@ -336,7 +340,7 @@ class Experiment(luigi.WrapperTask):
     def requires(self):
         for grid, fold_id in itertools.product(self.flatten_grid(), self.kfold_grid()):
             yield ModelAndEvaluate(
-                id=self.id,
+                id=self.experiment_id,
                 class_path=grid['class_path'],
                 params=grid['params'],
                 evaluation_config=self.evaluation_config,
