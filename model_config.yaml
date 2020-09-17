@@ -1,10 +1,10 @@
 grid_config:
     sklearn.ensemble.RandomForestClassifier:
-        n_estimators: [100, 500, 1000]
+        n_estimators: [100, 300, 500]
         criterion: [gini]
-        max_depth: [5, 10, 20, 30, 50]
+        max_depth: [5, 10, 20, 30]
         max_features: [sqrt, log2, 1.0]
-        min_samples_split: [5, 10, 20]
+        min_samples_split: [5, 10]
         n_jobs: [2]
     # catwalk's custom model wrapper ScaledLogisticRegression will
     # automatically scale the train data prior to fitting the model
@@ -14,15 +14,15 @@ grid_config:
         # C: [0.0001, 0.001, 0.01, 0.1]
     sklearn.tree.DecisionTreeClassifier:
         max_depth: [1, 2]
-        min_samples_split: [5, 10, 20]
-    # sklearn.neural_network.MLPClassifier:
-    #     activation: ['tanh', 'relu', 'logistic']
-    #     alpha: [0.0001, 0.001, 0.01]
+        # min_samples_split: [5, 10, 20]
+    sklearn.neural_network.MLPClassifier:
+        activation: ['tanh', 'relu', 'logistic']
+        alpha: [0.0001, 0.001, 0.01]
 
 
 evaluation_config:
     metrics: [precision@, recall@, roc_auc]
-    parameters: [20, all]
+    parameters: [10, 20, all]
 
 
 label_config:
