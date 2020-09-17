@@ -1,0 +1,11 @@
+argcmdr
+codecov==2.0.15
+pytest-cov==2.5.1
+Dickens==1.0.1
+pytest
+testing.postgresql
+mkdocs==1.0.4
+pymdown-extensions==6.0
+mkdocs-material==4.2.0
+black==19.3b0
+
