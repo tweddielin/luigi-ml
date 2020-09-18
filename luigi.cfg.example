@@ -1,0 +1,23 @@
+[core]
+default-scheduler-port=9091
+default-scheduler-host=luigi_service
+
+[task_history]
+db_connection = postgres://luigid@luigi_db/luigid
+
+[scheduler]
+record_task_history = True
+state-path = /var/tmp/luigi-state.pickle
+disable-window-seconds = 3600
+retry_count = 5
+remove_delay=86400
+
+[RedisConfig]
+host=redis
+port=6379
+
+[DatabaseConfig]
+host=luigi_db
+database=luigid
+user=luigid
+port=5432

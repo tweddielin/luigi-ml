@@ -46,4 +46,3 @@ def encoding_cat_feats(df, list_of_cat):
 def redis_connect(host=RedisConfig().host, port=RedisConfig().port, db=0):
     return redis.Redis(host=host, port=port, db=db)
 
-

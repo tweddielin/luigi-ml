@@ -1,0 +1,36 @@
+version: '3'
+
+services:
+    luigi_db:
+        container_name: luigi_db
+        image: postgres:10
+        ports:
+            - 5432:5432
+        environment:
+            - POSTGRES_DB=luigid
+            - POSTGRES_USER=luigid
+            - POSTGRES_HOST_AUTH_METHOD=trust
+    luigi_service:
+        container_name: luigi_service
+        build: .
+        ports:
+            - 9091:9091
+        volumes:
+            - '.:/app'
+        command: sh -c "/wait && python create_db.py && luigid --port=9091"
+        environment:
+            - WAIT_HOSTS=luigi_db:5432
+            - WAIT_HOSTS_TIMEOUT=300
+            - WAIT_SLEEP_INTERVAL=30
+            - WAIT_HOST_CONNECT_TIMEOUT=30
+        depends_on:
+            - luigi_db
+            - redis
+    redis:
+        container_name: redis
+        image: redis
+        ports:
+            - 6379:6379
+
+# docker exec -it luigi_db psql -d luigid -U luigid
+

@@ -13,3 +13,4 @@ numpy
 psycopg2-binary
 python-dateutil
 seaborn
+alembic
