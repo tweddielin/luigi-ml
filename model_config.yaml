@@ -4,21 +4,18 @@ grid_config:
         criterion: [gini]
         max_depth: [5, 10, 20, 30]
         max_features: [sqrt, log2, 1.0]
-        min_samples_split: [5, 10]
+        min_samples_split: [5, 10, 15]
         n_jobs: [2]
-    # catwalk's custom model wrapper ScaledLogisticRegression will
-    # automatically scale the train data prior to fitting the model
-    # and then use the same scaling for the test data
-    # triage.component.catwalk.estimators.classifiers.ScaledLogisticRegression:
-        # penalty: ['l1', 'l2']
-        # C: [0.0001, 0.001, 0.01, 0.1]
     sklearn.tree.DecisionTreeClassifier:
         max_depth: [1, 2]
-        # min_samples_split: [5, 10, 20]
+        min_samples_split: [5, 10, 20]
     sklearn.neural_network.MLPClassifier:
         activation: ['tanh', 'relu', 'logistic']
         alpha: [0.0001, 0.001, 0.01]
 
+feature_config:
+    drop_columns: [salary]
+    cat_feats: [gender, ssc_b, hsc_b, hsc_s, degree_t, workex, specialisation]
 
 evaluation_config:
     metrics: [precision@, recall@, roc_auc]
@@ -27,3 +24,10 @@ evaluation_config:
 
 label_config:
     label_column: [status]
+    label_value: [Placed]
+
+basic_config:
+  k_fold: 3
+  data_path: placement_data_full_class.csv
+  random_sample: False
+  sample_n: 50

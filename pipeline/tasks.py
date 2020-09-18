@@ -4,6 +4,9 @@ import time
 import importlib
 import yaml
 import datetime
+import csv
+import random
+import ast
 
 import luigi
 from luigi.parameter import ParameterVisibility
@@ -25,6 +28,35 @@ from pipeline.utils import filename_friendly_hash, scoped_session, redis_connect
 from pipeline.results import Model, Evaluation
 from pipeline.evaluations import Evaluations
 
+def read_csv(path):
+    with open(path) as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            row = dict(row)
+            new_row = {}
+            for k, v in row.items():
+                try:
+                    new_row[k] = ast.literal_eval(v)
+                except:
+                    if v == '':
+                        v = np.nan
+                    new_row[k] = v
+            yield new_row
+
+
+def reservoir(it, k):
+    it = iter(it)
+    result = []
+    for i, datum in enumerate(it):
+        if i < k:
+            result.append(datum)
+        else:
+            j = random.randint(0, i-1)
+            if j < k:
+                result[j] = datum
+    while len(result) > 0:
+        yield result.pop()
+
 
 class RedisCleanUp(luigi.Task):
     pattern = luigi.Parameter(default="*")
@@ -37,35 +69,49 @@ class RedisCleanUp(luigi.Task):
 
 class LoadData(luigi.Task):
     id = luigi.Parameter()
+    basic_config = luigi.DictParameter()
+
+    @property
+    def data_path(self):
+        return self.basic_config['data_path']
 
     def run(self):
-        df = pd.read_csv('placement_data_full_class.csv')
+        # Read and sample with lazy evaluation
+        reader = read_csv(self.data_path)
+        if self.basic_config['random_sample']:
+            df = pd.DataFrame(reservoir(reader, self.basic_config['sample_n']))
+        df = pd.DataFrame(reader)
+        # dfs = []
+        # for df in pd.read_csv(path, chunksize=100):
+        #     dfs.append(df)
+        # df = df.concat(dfs)
         redis_conn = redis_connect()
         serialized_data = df.to_msgpack(compress='zlib')
         redis_conn.set('data', serialized_data)
 
     def output(self):
-        return [NewRedisTarget(host=RedisConfig().host, port=6379, db=0, update_id=f"data")]
+        return NewRedisTarget(
+            host=RedisConfig().host,
+            port=6379,
+            db=0,
+            update_id=f"data")
 
 
 class BuildMatrix(luigi.Task):
     id = luigi.Parameter()
+    cat_feats = luigi.ListParameter()
+    label_column = luigi.Parameter()
+    label_value = luigi.Parameter()
+    drop_columns = luigi.ListParameter()
+    basic_config = luigi.DictParameter()
 
     def run(self):
         redis_conn = redis_connect()
         df = pd.read_msgpack(redis_conn.get("data"))
-        df.drop('salary', axis=1, inplace=True)
-        cat_feats = [
-            'gender',
-            'ssc_b',
-            'hsc_b',
-            'hsc_s',
-            'degree_t',
-            'workex',
-            'specialisation'
-        ]
-        df_transformed = encoding_cat_feats(df, cat_feats)
-        df_transformed['status'] = (df_transformed['status'] == 'Placed').astype(int)
+
+        df.drop(list(self.drop_columns), axis=1, inplace=True)
+        df_transformed = encoding_cat_feats(df, self.cat_feats)
+        df_transformed[self.label_column] = (df_transformed[self.label_column] == self.label_value).astype(int)
 
         serialized_matrix = df_transformed.to_msgpack(compress='zlib')
         redis_conn.set('matrix', serialized_matrix)
@@ -76,19 +122,26 @@ class BuildMatrix(luigi.Task):
     def requires(self):
         return LoadData(
             id=self.id,
+            basic_config=self.basic_config,
         )
 
 
 class TrainTestSplit(luigi.Task):
     id = luigi.Parameter()
-    k_fold = luigi.IntParameter()
+    cat_feats = luigi.ListParameter()
+    label_column = luigi.Parameter()
+    label_value = luigi.Parameter()
+    drop_columns = luigi.ListParameter()
+    basic_config = luigi.DictParameter()
+
+    @property
+    def k_fold(self):
+        return self.basic_config['k_fold']
 
     def run(self):
         redis_conn = redis_connect()
         df = pd.read_msgpack(redis_conn.get("matrix"))
-
         cv = KFold(n_splits=self.k_fold, random_state=1, shuffle=True)
-
         for i, indices in enumerate(cv.split(df)):
             train_index, test_index = indices
             index_dict = {'train_index': train_index.tolist(), 'test_index': test_index.tolist()}
@@ -98,16 +151,33 @@ class TrainTestSplit(luigi.Task):
         return [NewRedisTarget(host=RedisConfig().host, port=6379, db=0, update_id=f"fold_id:{x}") for x in range(self.k_fold)]
 
     def requires(self):
-        return [BuildMatrix(id=self.id)]
-
+        return BuildMatrix(
+            id=self.id,
+            cat_feats=self.cat_feats,
+            label_column=self.label_column,
+            label_value=self.label_value,
+            drop_columns=self.drop_columns,
+            basic_config=self.basic_config,
+        )
 
 class Fold(luigi.WrapperTask):
     id = luigi.IntParameter()
     fold_id = luigi.Parameter()
-    k_fold = luigi.IntParameter()
+    cat_feats = luigi.ListParameter()
+    label_column = luigi.Parameter()
+    label_value = luigi.Parameter()
+    drop_columns = luigi.ListParameter()
+    basic_config = luigi.DictParameter()
 
     def requires(self):
-        return TrainTestSplit(id=self.id, k_fold=self.k_fold)
+        return TrainTestSplit(
+            id=self.id,
+            cat_feats=self.cat_feats,
+            basic_config=self.basic_config,
+            label_column=self.label_column,
+            label_value=self.label_value,
+            drop_columns=self.drop_columns,
+        )
 
 
 class ModelAndEvaluate(DBCredentialMixin, luigi.Task):
@@ -116,8 +186,11 @@ class ModelAndEvaluate(DBCredentialMixin, luigi.Task):
     params = luigi.DictParameter()
     evaluation_config = luigi.DictParameter()
     label_column = luigi.Parameter()
+    label_value = luigi.Parameter()
     fold_id = luigi.IntParameter()
-    k_fold = luigi.IntParameter()
+    cat_feats = luigi.ListParameter()
+    drop_columns = luigi.ListParameter()
+    basic_config = luigi.DictParameter()
 
     evaluation_id_list = []
 
@@ -129,6 +202,10 @@ class ModelAndEvaluate(DBCredentialMixin, luigi.Task):
             "parameter": parameter,
             }
         return filename_friendly_hash(unique)
+
+    @property
+    def k_fold(self):
+        return self.basic_config['k_fold']
 
     @property
     def db_engine(self):
@@ -302,12 +379,30 @@ class ModelAndEvaluate(DBCredentialMixin, luigi.Task):
         return Fold(
             id=self.id,
             fold_id=self.fold_id,
-            k_fold=self.k_fold)
+            basic_config=self.basic_config,
+            cat_feats=self.cat_feats,
+            label_column=self.label_column,
+            label_value=self.label_value,
+            drop_columns=self.drop_columns,
+        )
 
 
 class Experiment(luigi.WrapperTask):
+    id = luigi.IntParameter(default='1')
     model_config = luigi.Parameter(description="model configuration file path")
-    k_fold = luigi.IntParameter()
+    data_path = luigi.Parameter(default=100)
+
+    @property
+    def basic_config(self):
+        return self.model_config_dict['basic_config']
+
+    @property
+    def cat_feats(self):
+        return self.model_config_dict['feature_config']['cat_feats']
+
+    @property
+    def drop_columns(self):
+        return self.model_config_dict['feature_config']['drop_columns']
 
     @property
     def model_config_dict(self):
@@ -317,6 +412,10 @@ class Experiment(luigi.WrapperTask):
     @property
     def label_column(self):
         return self.model_config_dict['label_config']['label_column'][0]
+
+    @property
+    def label_value(self):
+        return self.model_config_dict['label_config']['label_value'][0]
 
     @property
     def evaluation_config(self):
@@ -334,18 +433,20 @@ class Experiment(luigi.WrapperTask):
                 yield {'class_path': class_path, 'params': p}
 
     def kfold_grid(self):
-        for i in range(self.k_fold):
+        for i in range(self.basic_config['k_fold']):
             yield i
 
     def requires(self):
         for grid, fold_id in itertools.product(self.flatten_grid(), self.kfold_grid()):
             yield ModelAndEvaluate(
-                id=self.experiment_id,
+                id=self.id,
                 class_path=grid['class_path'],
                 params=grid['params'],
                 evaluation_config=self.evaluation_config,
                 label_column=self.label_column,
+                label_value=self.label_value,
                 fold_id=fold_id,
-                k_fold=self.k_fold,
+                basic_config=self.basic_config,
+                cat_feats=self.cat_feats,
+                drop_columns=self.drop_columns,
             )
-
