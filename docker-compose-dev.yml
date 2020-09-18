@@ -1,7 +1,7 @@
 version: '3'
 
 services:
-    postgres:
+    luigi_db:
         container_name: luigi_db
         image: postgres:10
         ports:
@@ -17,10 +17,17 @@ services:
             - 9091:9091
         volumes:
             - '.:/app'
+        command: sh -c "/wait && python create_db.py && luigid --port=9091"
+        environment:
+            - WAIT_HOSTS=luigi_db:5432
+            - WAIT_HOSTS_TIMEOUT=300
+            - WAIT_SLEEP_INTERVAL=30
+            - WAIT_HOST_CONNECT_TIMEOUT=30
         depends_on:
-            - postgres
+            - luigi_db
             - redis
     redis:
+        container_name: redis
         image: redis
         ports:
             - 6379:6379

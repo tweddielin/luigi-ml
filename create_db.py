@@ -22,7 +22,6 @@ if not url:
         password=DatabaseConfig().password,
         port=DatabaseConfig().port
     )
-print(url)
 
 engine = create_engine(url, echo=True)
 Base.metadata.create_all(engine)
