@@ -1,5 +1,5 @@
 # luigi-ml-service
-A ML experiment system implemented by luigi, redis, postgres and docker.
+A data/model agnostic ML experiment system implemented by luigi, redis, postgres and docker.
 
 # Quick Start
 
