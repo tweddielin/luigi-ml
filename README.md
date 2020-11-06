@@ -1,6 +1,6 @@
 # luigi-ml-service
 A data/model agnostic ML experiment system implemented by luigi, redis, postgres and docker.
-This project was spinned off from a talk I gave virtually at Instituto Tecnológico Autónomo de México of course over Zoom. Here's the slide of the talk and the part of this tool is [here](http://tweddielin.com/slides/data_science_engineering_view/#35)
+This project was spinned off from a talk I gave virtually at Instituto Tecnológico Autónomo de México of course over Zoom. The slide of the talk and the part of this tool is [here](http://tweddielin.com/slides/data_science_engineering_view/#35)
 
 # Quick Start
 
