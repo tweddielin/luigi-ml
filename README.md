@@ -13,7 +13,7 @@ cp luigi.cfg.example luigi.cfg
 #### Build with docker
 
 ```bash
-docker-compose -f docker-compose-dev.yml
+docker-compose -f docker-compose-dev.yml build
 ```
 
 #### Modify model_config.yaml
